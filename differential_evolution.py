@@ -13,9 +13,23 @@ Added by Andrew Nelson 2014
 from __future__ import division, print_function, absolute_import
 import numpy as np
 from scipy.optimize import OptimizeResult, minimize
-from scipy.optimize.optimize import _status_message
+try:
+    from scipy.optimize.optimize import _status_message
+except ImportError:
+    try:
+        from scipy.optimize._optimize import _status_message
+    except ImportError:
+        _status_message = {
+            'success': 'Optimization terminated successfully.',
+            'maxfev': 'Maximum number of function evaluations has been exceeded.',
+            'maxiter': 'Maximum number of iterations has been exceeded.',
+        }
 from scipy._lib._util import check_random_state
-from scipy._lib.six import xrange, string_types
+try:
+    from scipy._lib.six import xrange, string_types
+except ImportError:
+    xrange = range
+    string_types = (str,)
 import warnings
 
 

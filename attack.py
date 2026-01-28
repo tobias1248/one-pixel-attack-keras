@@ -6,15 +6,10 @@ import numpy as np
 import pandas as pd
 from keras.datasets import cifar10
 import pickle
+import time
 
 # Custom Networks
-from networks.lenet import LeNet
-from networks.pure_cnn import PureCnn
-from networks.network_in_network import NetworkInNetwork
-from networks.resnet import ResNet
-from networks.densenet import DenseNet
-from networks.wide_resnet import WideResNet
-from networks.capsnet import CapsNet
+from networks.vit import ViT
 
 # Helper functions
 from differential_evolution import differential_evolution
@@ -57,6 +52,7 @@ class PixelAttacker:
 
     def attack(self, img_id, model, target=None, pixel_count=1,
                maxiter=75, popsize=400, verbose=False, plot=False):
+        start_time = time.perf_counter()
         # Change the target class based on whether this is a targeted attack or not
         targeted_attack = target is not None
         target_class = target if targeted_attack else self.y_test[img_id, 0]
@@ -94,16 +90,24 @@ class PixelAttacker:
         if plot:
             helper.plot_image(attack_image, actual_class, self.class_names, predicted_class)
 
+        duration = time.perf_counter() - start_time
         return [model.name, pixel_count, img_id, actual_class, predicted_class, success, cdiff, prior_probs,
-                predicted_probs, attack_result.x]
+                predicted_probs, attack_result.x, duration]
 
     def attack_all(self, models, samples=500, pixels=(1, 3, 5), targeted=False,
-                   maxiter=75, popsize=400, verbose=False):
+                   maxiter=75, popsize=400, verbose=False, sample_mode='random',
+                   skip_correct_filter=False):
         results = []
         for model in models:
             model_results = []
-            valid_imgs = self.correct_imgs[self.correct_imgs.name == model.name].img
-            img_samples = np.random.choice(valid_imgs, samples)
+            if skip_correct_filter:
+                valid_imgs = np.arange(len(self.x_test))
+            else:
+                valid_imgs = self.correct_imgs[self.correct_imgs.name == model.name].img
+            if sample_mode == 'first':
+                img_samples = np.array(sorted(valid_imgs))[:samples]
+            else:
+                img_samples = np.random.choice(valid_imgs, samples)
 
             for pixel_count in pixels:
                 for i, img in enumerate(img_samples):
@@ -126,14 +130,46 @@ class PixelAttacker:
 
 
 if __name__ == '__main__':
+    def _load_lenet():
+        from networks.lenet import LeNet
+        return LeNet
+
+    def _load_pure_cnn():
+        from networks.pure_cnn import PureCnn
+        return PureCnn
+
+    def _load_net_in_net():
+        from networks.network_in_network import NetworkInNetwork
+        return NetworkInNetwork
+
+    def _load_resnet():
+        from networks.resnet import ResNet
+        return ResNet
+
+    def _load_densenet():
+        from networks.densenet import DenseNet
+        return DenseNet
+
+    def _load_wide_resnet():
+        from networks.wide_resnet import WideResNet
+        return WideResNet
+
+    def _load_capsnet():
+        from networks.capsnet import CapsNet
+        return CapsNet
+
+    def _load_vit():
+        return ViT
+
     model_defs = {
-        'lenet': LeNet,
-        'pure_cnn': PureCnn,
-        'net_in_net': NetworkInNetwork,
-        'resnet': ResNet,
-        'densenet': DenseNet,
-        'wide_resnet': WideResNet,
-        'capsnet': CapsNet
+        'lenet': _load_lenet,
+        'pure_cnn': _load_pure_cnn,
+        'net_in_net': _load_net_in_net,
+        'resnet': _load_resnet,
+        'densenet': _load_densenet,
+        'wide_resnet': _load_wide_resnet,
+        'capsnet': _load_capsnet,
+        'vit': _load_vit,
     }
 
     parser = argparse.ArgumentParser(description='Attack models on Cifar10')
@@ -148,6 +184,10 @@ if __name__ == '__main__':
     parser.add_argument('--samples', default=500, type=int,
                         help='The number of image samples to attack. Images are sampled randomly from the dataset.')
     parser.add_argument('--targeted', action='store_true', help='Set this switch to test for targeted attacks.')
+    parser.add_argument('--sample_mode', choices=('random', 'first'), default='random',
+                        help='Select image sampling mode. "first" uses the lowest-index correctly classified images.')
+    parser.add_argument('--skip_correct_filter', action='store_true',
+                        help='If set, sample from all test images without filtering to only correctly classified ones.')
     parser.add_argument('--save', default='networks/results/results.pkl', help='Save location for the results (pickle)')
     parser.add_argument('--verbose', action='store_true', help='Print out additional information every iteration.')
 
@@ -156,17 +196,19 @@ if __name__ == '__main__':
     # Load data and model
     _, test = cifar10.load_data()
     class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
-    models = [model_defs[m](load_weights=True) for m in args.model]
+    models = [model_defs[m]()(load_weights=True) for m in args.model]
 
     attacker = PixelAttacker(models, test, class_names)
 
     print('Starting attack')
 
     results = attacker.attack_all(models, samples=args.samples, pixels=args.pixels, targeted=args.targeted,
-                                  maxiter=args.maxiter, popsize=args.popsize, verbose=args.verbose)
+                                  maxiter=args.maxiter, popsize=args.popsize, verbose=args.verbose,
+                                  sample_mode=args.sample_mode,
+                                  skip_correct_filter=args.skip_correct_filter)
 
     columns = ['model', 'pixels', 'image', 'true', 'predicted', 'success', 'cdiff', 'prior_probs', 'predicted_probs',
-               'perturbation']
+               'perturbation', 'duration']
     results_table = pd.DataFrame(results, columns=columns)
 
     print(results_table[['model', 'pixels', 'image', 'true', 'predicted', 'success']])
